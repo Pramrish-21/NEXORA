@@ -9,7 +9,7 @@ interface CloudConfigModalProps {
 
 export const CloudConfigModal: React.FC<CloudConfigModalProps> = ({ isOpen, onClose }) => {
   const [copiedSql, setCopiedSql] = useState(false);
-  const [copiedNetlifyGuide, setCopiedNetlifyGuide] = useState(false);
+  const [copiedEnvGuide, setCopiedEnvGuide] = useState(false);
   const [tableStatus, setTableStatus] = useState<Record<string, boolean>>({
     profiles: false,
     messages: false,
@@ -51,13 +51,48 @@ create table if not exists public.profiles (
   full_name text default '',
   avatar_url text default '',
   bio text default '',
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  constraint username_length check (char_length(username) >= 3)
 );
 
 alter table public.profiles enable row level security;
+drop policy if exists "Public profiles viewable" on public.profiles;
 create policy "Public profiles viewable" on public.profiles for select using (true);
+drop policy if exists "Users insert own profile" on public.profiles;
 create policy "Users insert own profile" on public.profiles for insert with check (auth.uid() = id);
-create policy "Users update own profile" on public.profiles for update using (auth.uid() = id);
+drop policy if exists "Users update own profile" on public.profiles;
+create policy "Users update own profile" on public.profiles for update using (auth.uid() = id) with check (auth.uid() = id);
+
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  base_u text;
+  final_u text;
+  suffix int := 0;
+begin
+  base_u := coalesce(
+    nullif(regexp_replace(lower(trim(new.raw_user_meta_data->>'username')), '[^a-z0-9_]', '', 'g'), ''),
+    nullif(regexp_replace(lower(split_part(new.email, '@', 1)), '[^a-z0-9_]', '', 'g'), ''),
+    'user_' || substr(replace(new.id::text, '-', ''), 1, 8)
+  );
+  if length(base_u) < 3 then base_u := base_u || '_' || substr(replace(new.id::text, '-', ''), 1, 4); end if;
+  final_u := base_u;
+  while exists (select 1 from public.profiles where username = final_u and id <> new.id) loop
+    suffix := suffix + 1;
+    final_u := base_u || suffix::text;
+  end loop;
+
+  insert into public.profiles (id, username, full_name, avatar_url, bio, created_at)
+  values (new.id, final_u, coalesce(new.raw_user_meta_data->>'full_name', ''),
+    coalesce(new.raw_user_meta_data->>'avatar_url', 'https://api.dicebear.com/7.x/identicon/svg?seed=' || final_u),
+    'NEXORA Member.', timezone('utc'::text, now()))
+  on conflict (id) do update set username = excluded.username;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created after insert on auth.users for each row execute function public.handle_new_user();
 
 create table if not exists public.messages (
   id uuid default uuid_generate_v4() primary key,
@@ -68,11 +103,13 @@ create table if not exists public.messages (
 );
 
 alter table public.messages enable row level security;
+drop policy if exists "Users read own messages" on public.messages;
 create policy "Users read own messages" on public.messages for select using (auth.uid() = sender_id or auth.uid() = receiver_id);
+drop policy if exists "Users send messages" on public.messages;
 create policy "Users send messages" on public.messages for insert with check (auth.uid() = sender_id);
 
 alter table public.messages replica identity full;
-alter publication supabase_realtime add table public.messages;`;
+do $$ begin alter publication supabase_realtime add table public.messages; exception when duplicate_object then null; end $$;`;
 
   const copySql = async () => {
     await navigator.clipboard.writeText(SQL_SNIPPET);
@@ -80,11 +117,11 @@ alter publication supabase_realtime add table public.messages;`;
     setTimeout(() => setCopiedSql(false), 2000);
   };
 
-  const copyNetlifyVariables = async () => {
+  const copyEnvVariables = async () => {
     const text = `VITE_SUPABASE_URL\nVITE_SUPABASE_ANON_KEY`;
     await navigator.clipboard.writeText(text);
-    setCopiedNetlifyGuide(true);
-    setTimeout(() => setCopiedNetlifyGuide(false), 2000);
+    setCopiedEnvGuide(true);
+    setTimeout(() => setCopiedEnvGuide(false), 2000);
   };
 
   return (
@@ -131,7 +168,7 @@ alter publication supabase_realtime add table public.messages;`;
               {isConfigured ? 'Supabase Project Connected' : 'Environment Variables Required'}
             </p>
             <p className="text-neutral-300 font-mono text-[11px] truncate max-w-[280px]">
-              {isConfigured && supabaseUrl ? supabaseUrl : 'Configure in Netlify / Hosting Environment'}
+              {isConfigured && supabaseUrl ? supabaseUrl : 'Configure in Environment Variables'}
             </p>
           </div>
         </div>
@@ -158,23 +195,23 @@ alter publication supabase_realtime add table public.messages;`;
           </div>
         </div>
 
-        {/* Netlify Deployment Security Instructions */}
+        {/* Production Environment Security Instructions */}
         <div className="p-3.5 bg-neutral-900/60 border border-neutral-800 rounded-xl text-xs space-y-2 leading-relaxed text-neutral-300">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-1.5 text-white font-semibold">
               <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span>Netlify Environment Variables</span>
+              <span>Environment Variables Setup</span>
             </div>
             <button
-              onClick={copyNetlifyVariables}
+              onClick={copyEnvVariables}
               className="text-[10px] font-mono text-neutral-400 hover:text-white flex items-center space-x-1 px-1.5 py-0.5 bg-neutral-800 rounded"
             >
-              {copiedNetlifyGuide ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-              <span>{copiedNetlifyGuide ? 'Copied' : 'Copy Names'}</span>
+              {copiedEnvGuide ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+              <span>{copiedEnvGuide ? 'Copied' : 'Copy Names'}</span>
             </button>
           </div>
           <p className="text-neutral-400 text-[11px]">
-            To comply with Netlify secrets scanning, credentials must be set in your Netlify site dashboard under:
+            To comply with security scanning and protect secrets, credentials must be set in your hosting site dashboard under:
           </p>
           <div className="bg-neutral-950 p-2.5 rounded-lg border border-neutral-800/80 font-mono text-[10px] space-y-1 text-neutral-300">
             <div><span className="text-neutral-500">1.</span> Site configuration &gt; Environment variables</div>

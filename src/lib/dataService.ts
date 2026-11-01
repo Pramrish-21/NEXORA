@@ -2,9 +2,15 @@ import { Post, Profile, Comment, Message, Story } from '../types/database';
 import { supabase, isConfigured } from './supabase';
 import { INITIAL_POSTS, INITIAL_COMMENTS, INITIAL_STORIES } from './mockData';
 
+export function isValidUUID(id: string | null | undefined): boolean {
+  if (!id || typeof id !== 'string') return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id.trim());
+}
+
 export const dataService = {
   // PROFILES
   async getProfile(userId: string): Promise<Profile | null> {
+    if (!isValidUUID(userId)) return null;
     if (isConfigured) {
       try {
         const { data, error } = await supabase
@@ -20,6 +26,58 @@ export const dataService = {
       }
     }
     return null;
+  },
+
+  async ensureProfile(currentUser: {
+    id: string;
+    email?: string;
+    user_metadata?: Record<string, any>;
+  }): Promise<Profile> {
+    if (!isConfigured) {
+      throw new Error('Supabase is not configured.');
+    }
+    if (!isValidUUID(currentUser.id)) {
+      throw new Error('Invalid user ID: Must be a valid UUID');
+    }
+
+    // 1. Check if profile already exists in public.profiles
+    const existing = await dataService.getProfile(currentUser.id);
+    if (existing) return existing;
+
+    // 2. Derive sanitized username
+    const metadata = currentUser.user_metadata || {};
+    let username =
+      metadata.username ||
+      (currentUser.email ? currentUser.email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') : '') ||
+      'user_' + currentUser.id.slice(0, 6);
+    username = username.toLowerCase().replace(/[^a-z0-9_]/g, '');
+    if (username.length < 3) {
+      username = `user_${currentUser.id.replace(/-/g, '').slice(0, 6)}`;
+    }
+
+    const newProfile: Profile = {
+      id: currentUser.id,
+      username,
+      full_name: metadata.full_name || '',
+      avatar_url:
+        metadata.avatar_url ||
+        `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(username)}`,
+      bio: metadata.bio || 'NEXORA Member.',
+      created_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .upsert(newProfile, { onConflict: 'id' })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Failed to create/ensure profile in database:', error);
+      throw error;
+    }
+
+    return data as Profile;
   },
 
   async searchProfiles(query: string, excludeUserId?: string): Promise<Profile[]> {
@@ -219,6 +277,7 @@ export const dataService = {
 
   // REAL DIRECT MESSAGING (PERSISTED IN SUPABASE WITH RLS)
   async getConversations(userId: string): Promise<Profile[]> {
+    if (!isValidUUID(userId)) return [];
     if (isConfigured) {
       try {
         const { data, error } = await supabase
@@ -236,7 +295,7 @@ export const dataService = {
             new Set(
               data
                 .map((m) => (m.sender_id === userId ? m.receiver_id : m.sender_id))
-                .filter((id) => id && id !== userId)
+                .filter((id) => id && id !== userId && isValidUUID(id))
             )
           );
 
@@ -259,6 +318,7 @@ export const dataService = {
   },
 
   async getMessages(userId: string, partnerId: string): Promise<Message[]> {
+    if (!isValidUUID(userId) || !isValidUUID(partnerId)) return [];
     if (isConfigured) {
       try {
         // Query messages where current user is either sender or receiver (matches RLS)
@@ -290,24 +350,74 @@ export const dataService = {
   },
 
   async sendMessage(senderId: string, receiverId: string, content: string): Promise<Message> {
-    if (isConfigured) {
-      const { data, error } = await supabase
-        .from('messages')
-        .insert({
-          sender_id: senderId,
-          receiver_id: receiverId,
-          content: content.trim(),
-        })
-        .select()
-        .single();
-
-      if (error) {
-        console.error('Supabase sendMessage error:', error);
-        throw error;
-      }
-      return data as Message;
+    if (!isConfigured) {
+      throw new Error('Supabase is not configured.');
     }
-    throw new Error('Supabase is not configured.');
+
+    const cleanContent = content.trim();
+    if (!cleanContent) {
+      throw new Error('Message content cannot be empty.');
+    }
+
+    // 1. Sender ID validation
+    if (!isValidUUID(senderId)) {
+      throw new Error(`Invalid sender UUID (${senderId}). Sender must be an authenticated user.`);
+    }
+
+    // 2. Receiver ID validation
+    if (!isValidUUID(receiverId)) {
+      throw new Error(
+        `Recipient "${receiverId}" is not a valid user UUID. Direct messages can only be sent to registered NEXORA members.`
+      );
+    }
+
+    // 3. Verify sender profile exists in public.profiles to prevent messages_sender_id_fkey violation
+    const senderProfile = await dataService.getProfile(senderId);
+    if (!senderProfile) {
+      try {
+        const { data: authData } = await supabase.auth.getUser();
+        if (authData.user && authData.user.id === senderId) {
+          await dataService.ensureProfile(authData.user);
+        }
+      } catch (e) {
+        console.warn('Could not auto-provision sender profile:', e);
+      }
+    }
+
+    // 4. Verify receiver profile exists in public.profiles to prevent messages_receiver_id_fkey violation
+    const receiverProfile = await dataService.getProfile(receiverId);
+    if (!receiverProfile) {
+      throw new Error(
+        `Recipient profile was not found in the database. The recipient must have a registered profile in public.profiles.`
+      );
+    }
+
+    // 5. Insert message with sender_id and receiver_id
+    const { data, error } = await supabase
+      .from('messages')
+      .insert({
+        sender_id: senderId,
+        receiver_id: receiverId,
+        content: cleanContent,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Supabase sendMessage error:', error);
+      if (error.code === '23503') {
+        if (error.message?.includes('messages_sender_id_fkey') || error.details?.includes('sender_id')) {
+          throw new Error('Sender profile missing from database. Please run the SQL migration or re-login.');
+        }
+        if (error.message?.includes('messages_receiver_id_fkey') || error.details?.includes('receiver_id')) {
+          throw new Error('Recipient profile missing from database. Direct messaging requires registered members.');
+        }
+        throw new Error(`Foreign key constraint error on messages: ${error.message}`);
+      }
+      throw error;
+    }
+
+    return data as Message;
   },
 
   // STORIES

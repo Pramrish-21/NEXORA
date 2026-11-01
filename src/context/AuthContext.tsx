@@ -59,36 +59,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // 1. Attempt to fetch profile row from public.profiles
       let p = await dataService.getProfile(currentUser.id);
 
-      // 2. If row does not exist yet (e.g., PostgreSQL trigger was delayed or absent), create it
+      // 2. If row does not exist yet (e.g., PostgreSQL trigger was delayed or absent), persist it
       if (!p) {
-        const metadata = currentUser.user_metadata || {};
-        const generatedUsername =
-          metadata.username ||
-          (currentUser.email ? currentUser.email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') : '') ||
-          'user_' + currentUser.id.slice(0, 6);
+        try {
+          p = await dataService.ensureProfile(currentUser);
+        } catch (ensureErr) {
+          console.warn('ensureProfile attempt error:', ensureErr);
+          // Fallback to local representation if offline/network failure
+          const metadata = currentUser.user_metadata || {};
+          const generatedUsername =
+            metadata.username ||
+            (currentUser.email ? currentUser.email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') : '') ||
+            'user_' + currentUser.id.slice(0, 6);
 
-        const newProfileData: Profile = {
-          id: currentUser.id,
-          username: generatedUsername.toLowerCase(),
-          full_name: metadata.full_name || '',
-          avatar_url:
-            metadata.avatar_url ||
-            `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(generatedUsername)}`,
-          bio: metadata.bio || 'NEXORA Member.',
-          created_at: new Date().toISOString(),
-        };
-
-        const { data, error } = await supabase
-          .from('profiles')
-          .upsert(newProfileData)
-          .select()
-          .maybeSingle();
-
-        if (!error && data) {
-          p = data as Profile;
-        } else if (error) {
-          console.warn('Upsert profile notice:', error.message);
-          p = newProfileData;
+          p = {
+            id: currentUser.id,
+            username: generatedUsername.toLowerCase(),
+            full_name: metadata.full_name || '',
+            avatar_url:
+              metadata.avatar_url ||
+              `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(generatedUsername)}`,
+            bio: metadata.bio || 'NEXORA Member.',
+            created_at: new Date().toISOString(),
+          };
         }
       }
 

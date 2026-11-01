@@ -42,3 +42,21 @@ body {
 .animate-fade-in {
   animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
+
+/* Suppress any visible Netlify branding, badges, feedback drawer overlays, or promotional footer elements */
+[data-netlify-badge],
+.netlify-badge,
+#netlify-badge,
+[class*="netlify-badge"],
+[id*="netlify-badge"],
+.netlify-feedback-drawer,
+#netlify-feedback-drawer,
+[data-testid*="netlify"],
+iframe[src*="netlify.com"],
+a[href*="netlify.com/img/global/badges"] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+

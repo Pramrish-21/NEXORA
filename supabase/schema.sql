@@ -30,27 +30,61 @@ create table if not exists public.profiles (
 alter table public.profiles enable row level security;
 create policy "Public profiles are viewable by everyone" on public.profiles for select using (true);
 create policy "Users can insert their own profile" on public.profiles for insert with check (auth.uid() = id);
-create policy "Users can update their own profile" on public.profiles for update using (auth.uid() = id);
+create policy "Users can update their own profile" on public.profiles for update using (auth.uid() = id) with check (auth.uid() = id);
 
--- Trigger: Automatically generate public.profiles row when a user signs up
+-- Trigger: Automatically and robustly generate public.profiles row when a user signs up
 create or replace function public.handle_new_user()
-returns trigger as $$
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  base_username text;
+  candidate_username text;
+  suffix int := 0;
 begin
-  insert into public.profiles (id, username, full_name, avatar_url)
+  base_username := coalesce(
+    nullif(regexp_replace(lower(trim(new.raw_user_meta_data->>'username')), '[^a-z0-9_]', '', 'g'), ''),
+    nullif(regexp_replace(lower(split_part(new.email, '@', 1)), '[^a-z0-9_]', '', 'g'), ''),
+    'user_' || substr(replace(new.id::text, '-', ''), 1, 8)
+  );
+
+  if length(base_username) < 3 then
+    base_username := base_username || '_' || substr(replace(new.id::text, '-', ''), 1, 4);
+  end if;
+
+  candidate_username := base_username;
+  while exists (select 1 from public.profiles where username = candidate_username and id <> new.id) loop
+    suffix := suffix + 1;
+    candidate_username := base_username || suffix::text;
+  end loop;
+
+  insert into public.profiles (id, username, full_name, avatar_url, bio, created_at)
   values (
     new.id,
-    coalesce(new.raw_user_meta_data->>'username', 'user_' || substr(new.id::text, 1, 8)),
+    candidate_username,
     coalesce(new.raw_user_meta_data->>'full_name', ''),
-    coalesce(new.raw_user_meta_data->>'avatar_url', '')
-  );
+    coalesce(
+      new.raw_user_meta_data->>'avatar_url',
+      'https://api.dicebear.com/7.x/identicon/svg?seed=' || candidate_username
+    ),
+    coalesce(new.raw_user_meta_data->>'bio', 'NEXORA Member.'),
+    timezone('utc'::text, now())
+  )
+  on conflict (id) do update set
+    username = excluded.username,
+    full_name = coalesce(nullif(excluded.full_name, ''), public.profiles.full_name),
+    avatar_url = coalesce(nullif(excluded.avatar_url, ''), public.profiles.avatar_url);
+
   return new;
 end;
-$$ language plpgsql security definer;
+$$;
 
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
-  for each row execute procedure public.handle_new_user();
+  for each row execute function public.handle_new_user();
 
 -- 3. POSTS TABLE
 create table if not exists public.posts (
@@ -115,4 +149,42 @@ create policy "Users can insert messages as sender" on public.messages
 
 -- Enable Realtime for Messaging
 alter table public.messages replica identity full;
-alter publication supabase_realtime add table public.messages;
+do $$
+begin
+  alter publication supabase_realtime add table public.messages;
+exception
+  when duplicate_object then null;
+end $$;
+
+-- 7. BACKFILL MISSING PROFILES (Ensures foreign keys never fail for pre-existing auth users)
+insert into public.profiles (id, username, full_name, avatar_url, bio, created_at)
+select
+  u.id,
+  coalesce(
+    nullif(regexp_replace(lower(trim(u.raw_user_meta_data->>'username')), '[^a-z0-9_]', '', 'g'), ''),
+    nullif(regexp_replace(lower(split_part(u.email, '@', 1)), '[^a-z0-9_]', '', 'g'), ''),
+    'user_' || substr(replace(u.id::text, '-', ''), 1, 8)
+  ) || case 
+    when exists (
+      select 1 from public.profiles p2 
+      where p2.username = coalesce(
+        nullif(regexp_replace(lower(trim(u.raw_user_meta_data->>'username')), '[^a-z0-9_]', '', 'g'), ''),
+        nullif(regexp_replace(lower(split_part(u.email, '@', 1)), '[^a-z0-9_]', '', 'g'), ''),
+        'user_' || substr(replace(u.id::text, '-', ''), 1, 8)
+      ) and p2.id <> u.id
+    ) then '_' || substr(replace(u.id::text, '-', ''), 1, 4)
+    else ''
+  end as username,
+  coalesce(u.raw_user_meta_data->>'full_name', '') as full_name,
+  coalesce(
+    u.raw_user_meta_data->>'avatar_url',
+    'https://api.dicebear.com/7.x/identicon/svg?seed=' || u.id::text
+  ) as avatar_url,
+  'NEXORA Member.' as bio,
+  coalesce(u.created_at, timezone('utc'::text, now())) as created_at
+from auth.users u
+where not exists (
+  select 1 from public.profiles p where p.id = u.id
+)
+on conflict (id) do nothing;
+

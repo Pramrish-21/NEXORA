@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Send, ArrowLeft, Search, CheckCheck, Sparkles, AlertCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Message, Profile } from '../types/database';
-import { dataService } from '../lib/dataService';
+import { dataService, isValidUUID } from '../lib/dataService';
 import { supabase, isConfigured } from '../lib/supabase';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 
@@ -28,6 +28,8 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
   const [realtimeStatus, setRealtimeStatus] = useState<string>('connecting');
   const chatBottomRef = useRef<HTMLDivElement>(null);
 
+  const isRealPartner = Boolean(activePartner && isValidUUID(activePartner.id));
+
   // If initialReceiver is passed in props, open that conversation
   useEffect(() => {
     if (initialReceiver) {
@@ -37,7 +39,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
 
   // Load conversations list
   const loadConversations = async () => {
-    if (!user) return;
+    if (!user || !isValidUUID(user.id)) return;
     try {
       const convos = await dataService.getConversations(user.id);
       setConversations(convos);
@@ -52,7 +54,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
 
   // Global inbox listener to update conversation list when new messages arrive
   useEffect(() => {
-    if (!user || !isConfigured) return;
+    if (!user || !isConfigured || !isValidUUID(user.id)) return;
 
     const inboxChannel = supabase
       .channel(`inbox_notifications_${user.id}`)
@@ -78,6 +80,14 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
   // Load message history and subscribe to Realtime for active conversation
   useEffect(() => {
     if (!user || !activePartner) return;
+
+    if (!isValidUUID(user.id) || !isValidUUID(activePartner.id)) {
+      setMessages([]);
+      setLoadingHistory(false);
+      setSendError(null);
+      return;
+    }
+
     setLoadingHistory(true);
     setSendError(null);
 
@@ -134,6 +144,13 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
   const handleSendMessage = async (customText?: string) => {
     const textToSend = (customText ?? inputContent).trim();
     if (!textToSend || !user || !activePartner) return;
+
+    if (!isValidUUID(activePartner.id)) {
+      setSendError(
+        `Cannot send message to simulated preview profile @${activePartner.username}. Please select a registered member.`
+      );
+      return;
+    }
 
     setInputContent('');
     setSendError(null);
@@ -223,6 +240,25 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
           <div className="p-2.5 bg-red-950/80 border-b border-red-800 text-xs text-red-200 flex items-center space-x-2">
             <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
             <p className="truncate flex-1">{sendError}</p>
+          </div>
+        )}
+
+        {/* Curated Preview Notice */}
+        {activePartner && !isRealPartner && (
+          <div className="p-3 bg-neutral-900 border-b border-neutral-800 text-xs text-neutral-300 flex items-center justify-between">
+            <div className="flex items-center space-x-2 min-w-0 pr-2">
+              <Sparkles className="w-4 h-4 text-amber-400 flex-shrink-0" />
+              <p className="truncate">
+                @{activePartner.username} is a preview profile. Real-time direct messaging connects registered NEXORA accounts.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onNavigateToSearch}
+              className="px-2.5 py-1 bg-white text-black text-[11px] font-semibold rounded-lg hover:bg-neutral-200 transition flex-shrink-0"
+            >
+              Find Members
+            </button>
           </div>
         )}
 
