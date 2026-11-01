@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../context/AuthContext';
+import { getAuthRedirectUrl } from '../lib/authHelpers';
 import {
   Sparkles,
   ShieldCheck,
@@ -18,6 +20,7 @@ interface AuthPageProps {
 type AuthMode = 'login' | 'signup' | 'forgot_password' | 'email_sent';
 
 export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
+  const { authNotice, setAuthNotice } = useAuth();
   const [mode, setMode] = useState<AuthMode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -32,7 +35,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
     e.preventDefault();
     setErrorMessage(null);
     setInfoMessage(null);
+    setAuthNotice(null);
     setLoading(true);
+
+    const redirectUrl = getAuthRedirectUrl();
 
     try {
       if (mode === 'signup') {
@@ -49,7 +55,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
           email: email.trim(),
           password,
           options: {
-            emailRedirectTo: window.location.origin,
+            emailRedirectTo: redirectUrl,
             data: {
               username: cleanUsername,
               full_name: fullName.trim(),
@@ -117,10 +123,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
     setLoading(true);
     setErrorMessage(null);
     setInfoMessage(null);
+    setAuthNotice(null);
 
     try {
+      const redirectUrl = getAuthRedirectUrl();
+
       const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        redirectTo: window.location.origin,
+        redirectTo: redirectUrl,
       });
 
       if (error) throw error;
@@ -144,11 +153,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
     setResendingEmail(true);
     setErrorMessage(null);
     try {
+      const redirectUrl = getAuthRedirectUrl();
+
       const { error } = await supabase.auth.resend({
         type: 'signup',
         email: email.trim(),
         options: {
-          emailRedirectTo: window.location.origin,
+          emailRedirectTo: redirectUrl,
         },
       });
 
@@ -176,12 +187,23 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
         </p>
       </div>
 
+      {/* Global Auth / URL notice (e.g. Expired Link) */}
+      {authNotice && (
+        <div className="mb-4 p-3.5 bg-amber-950/80 border border-amber-800/80 rounded-2xl text-xs text-amber-200 leading-relaxed flex items-start space-x-2">
+          <AlertCircle className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
+          <div className="flex-1">
+            <p className="font-semibold text-amber-300">Notice</p>
+            <p className="mt-0.5 text-amber-200">{authNotice}</p>
+          </div>
+        </div>
+      )}
+
       {/* Error Notice */}
       {errorMessage && (
         <div className="mb-4 p-3.5 bg-red-950/80 border border-red-800/80 rounded-2xl text-xs text-red-200 leading-relaxed flex items-start space-x-2">
           <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
           <div className="flex-1">
-            <p className="font-semibold text-red-300">Authentication Notice</p>
+            <p className="font-semibold text-red-300">Authentication Error</p>
             <p className="mt-0.5 text-red-200">{errorMessage}</p>
           </div>
         </div>
@@ -264,8 +286,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
           </div>
 
           <p className="text-xs text-neutral-400 leading-relaxed">
-            Enter your registered email address and Supabase Auth will send you a secure password
-            recovery link.
+            Enter your registered email address and Supabase Auth will dispatch a secure password
+            recovery link directly to your inbox.
           </p>
 
           <form onSubmit={handleForgotPassword} className="space-y-3.5">

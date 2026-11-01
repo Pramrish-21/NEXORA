@@ -3,6 +3,7 @@ import { User, Session } from '@supabase/supabase-js';
 import { supabase, isConfigured } from '../lib/supabase';
 import { Profile } from '../types/database';
 import { dataService } from '../lib/dataService';
+import { getAuthRedirectUrl } from '../lib/authHelpers';
 
 interface AuthContextType {
   user: User | null;
@@ -13,6 +14,8 @@ interface AuthContextType {
   isPasswordRecovery: boolean;
   setIsPasswordRecovery: (value: boolean) => void;
   isEmailUnverified: boolean;
+  authNotice: string | null;
+  setAuthNotice: (notice: string | null) => void;
   refreshProfile: () => Promise<void>;
   signOut: () => Promise<void>;
   updateProfileDetails: (updates: Partial<Profile>) => Promise<void>;
@@ -29,6 +32,8 @@ const AuthContext = createContext<AuthContextType>({
   isPasswordRecovery: false,
   setIsPasswordRecovery: () => {},
   isEmailUnverified: false,
+  authNotice: null,
+  setAuthNotice: () => {},
   refreshProfile: async () => {},
   signOut: async () => {},
   updateProfileDetails: async () => {},
@@ -42,6 +47,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
 
   // Check if current user email is awaiting confirmation
   const isEmailUnverified = Boolean(
@@ -104,9 +110,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
-    // Check if URL contains recovery token
-    if (typeof window !== 'undefined' && window.location.hash.includes('type=recovery')) {
-      setIsPasswordRecovery(true);
+    // Inspect URL parameters for recovery state or error tokens
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash || '';
+      const search = window.location.search || '';
+
+      // Check for error parameters (e.g. otp_expired, link already used)
+      if (hash.includes('error=') || search.includes('error=')) {
+        const rawString = hash.includes('error=') ? hash.replace(/^#/, '') : search.replace(/^\?/, '');
+        const params = new URLSearchParams(rawString);
+        const errorDesc = params.get('error_description') || params.get('error') || 'The authentication link is invalid or has expired.';
+        setAuthNotice(decodeURIComponent(errorDesc.replace(/\+/g, ' ')));
+
+        // Clean up URL
+        window.history.replaceState(null, '', window.location.pathname);
+      }
+
+      // Check for recovery type in hash or query
+      if (hash.includes('type=recovery') || search.includes('type=recovery')) {
+        setIsPasswordRecovery(true);
+      }
+
+      // Handle PKCE code exchange if present in search params
+      if (search.includes('code=')) {
+        const urlParams = new URLSearchParams(search);
+        const code = urlParams.get('code');
+        if (code) {
+          supabase.auth.exchangeCodeForSession(code).then(({ data, error }) => {
+            if (!error && data.session) {
+              setSession(data.session);
+              setUser(data.session.user);
+              syncUserProfile(data.session.user);
+
+              // If recovery flow or user redirected from reset link
+              if (hash.includes('type=recovery') || search.includes('type=recovery')) {
+                setIsPasswordRecovery(true);
+              }
+            } else if (error) {
+              setAuthNotice(error.message);
+            }
+          });
+        }
+      }
     }
 
     // Check active session
@@ -172,11 +217,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!targetEmail) {
       throw new Error('No email address available to resend verification.');
     }
+    const redirectUrl = getAuthRedirectUrl();
     const { error } = await supabase.auth.resend({
       type: 'signup',
       email: targetEmail,
       options: {
-        emailRedirectTo: window.location.origin,
+        emailRedirectTo: redirectUrl,
       },
     });
     if (error) throw error;
@@ -193,6 +239,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isPasswordRecovery,
         setIsPasswordRecovery,
         isEmailUnverified,
+        authNotice,
+        setAuthNotice,
         refreshProfile,
         signOut,
         updateProfileDetails,

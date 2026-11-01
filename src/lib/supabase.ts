@@ -1,30 +1,22 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Retrieve from environment or saved localStorage configuration
-const envUrl = import.meta.env.VITE_SUPABASE_URL;
-const envAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-const storedUrl = typeof window !== 'undefined' ? localStorage.getItem('nexora_supabase_url') : null;
-const storedKey = typeof window !== 'undefined' ? localStorage.getItem('nexora_supabase_key') : null;
-
-export const supabaseUrl = envUrl || storedUrl || '';
-export const supabaseAnonKey = envAnonKey || storedKey || '';
+// Retrieve credentials strictly from Vite environment variables
+export const supabaseUrl: string = import.meta.env.VITE_SUPABASE_URL || '';
+export const supabaseAnonKey: string = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
 export const isConfigured = Boolean(
-  supabaseUrl && 
-  supabaseAnonKey && 
-  supabaseUrl !== 'https://placeholder.supabase.co' && 
-  supabaseAnonKey !== 'placeholder'
+  supabaseUrl &&
+  supabaseAnonKey &&
+  supabaseUrl.startsWith('https://') &&
+  !supabaseUrl.includes('your-project') &&
+  !supabaseUrl.includes('unconfigured') &&
+  supabaseAnonKey !== 'your-anon-key' &&
+  supabaseAnonKey !== 'unconfigured-public-key'
 );
 
-if (!isConfigured && typeof window !== 'undefined') {
-  console.info(
-    'NEXORA: Running in interactive Instant Preview mode with local persistence. You can connect your live Supabase project anytime in Settings.'
-  );
-}
-
 export const supabase: SupabaseClient = createClient(
-  supabaseUrl || 'https://placeholder.supabase.co',
-  supabaseAnonKey || 'placeholder',
+  supabaseUrl || 'https://unconfigured.local',
+  supabaseAnonKey || 'unconfigured-public-key',
   {
     auth: {
       persistSession: true,
@@ -32,19 +24,3 @@ export const supabase: SupabaseClient = createClient(
     },
   }
 );
-
-export function saveCustomSupabaseConfig(url: string, key: string) {
-  if (typeof window !== 'undefined') {
-    localStorage.setItem('nexora_supabase_url', url.trim());
-    localStorage.setItem('nexora_supabase_key', key.trim());
-    window.location.reload();
-  }
-}
-
-export function clearCustomSupabaseConfig() {
-  if (typeof window !== 'undefined') {
-    localStorage.removeItem('nexora_supabase_url');
-    localStorage.removeItem('nexora_supabase_key');
-    window.location.reload();
-  }
-}

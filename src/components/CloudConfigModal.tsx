@@ -1,13 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, Database, Check, Copy, Server, ShieldCheck, CheckCircle2 } from 'lucide-react';
-import {
-  supabaseUrl,
-  supabaseAnonKey,
-  isConfigured,
-  saveCustomSupabaseConfig,
-  clearCustomSupabaseConfig,
-  supabase,
-} from '../lib/supabase';
+import { X, Database, Check, Copy, Server, ShieldCheck, CheckCircle2, HelpCircle } from 'lucide-react';
+import { supabaseUrl, isConfigured, supabase } from '../lib/supabase';
 
 interface CloudConfigModalProps {
   isOpen: boolean;
@@ -15,9 +8,8 @@ interface CloudConfigModalProps {
 }
 
 export const CloudConfigModal: React.FC<CloudConfigModalProps> = ({ isOpen, onClose }) => {
-  const [url, setUrl] = useState(supabaseUrl);
-  const [key, setKey] = useState(supabaseAnonKey);
   const [copiedSql, setCopiedSql] = useState(false);
+  const [copiedNetlifyGuide, setCopiedNetlifyGuide] = useState(false);
   const [tableStatus, setTableStatus] = useState<Record<string, boolean>>({
     profiles: false,
     messages: false,
@@ -49,17 +41,6 @@ export const CloudConfigModal: React.FC<CloudConfigModalProps> = ({ isOpen, onCl
   }, [isOpen]);
 
   if (!isOpen) return null;
-
-  const handleSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (url.trim() && key.trim()) {
-      saveCustomSupabaseConfig(url, key);
-    }
-  };
-
-  const handleDisconnect = () => {
-    clearCustomSupabaseConfig();
-  };
 
   const SQL_SNIPPET = `-- Run in Supabase SQL Editor:
 create extension if not exists "uuid-ossp";
@@ -99,6 +80,13 @@ alter publication supabase_realtime add table public.messages;`;
     setTimeout(() => setCopiedSql(false), 2000);
   };
 
+  const copyNetlifyVariables = async () => {
+    const text = `VITE_SUPABASE_URL\nVITE_SUPABASE_ANON_KEY`;
+    await navigator.clipboard.writeText(text);
+    setCopiedNetlifyGuide(true);
+    setTimeout(() => setCopiedNetlifyGuide(false), 2000);
+  };
+
   return (
     <div
       onClick={onClose}
@@ -115,7 +103,7 @@ alter publication supabase_realtime add table public.messages;`;
               <Database className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-sm text-white">Supabase Live Multi-User Status</h3>
+              <h3 className="font-bold text-sm text-white">Supabase Multi-User Status</h3>
               <p className="text-[11px] text-neutral-400 font-mono">
                 Real-time RLS Database Integration
               </p>
@@ -130,12 +118,20 @@ alter publication supabase_realtime add table public.messages;`;
         </div>
 
         {/* Live Status Card */}
-        <div className="p-3.5 rounded-xl border bg-emerald-950/40 border-emerald-800/80 text-emerald-200 text-xs flex items-start space-x-3">
+        <div
+          className={`p-3.5 rounded-xl border text-xs flex items-start space-x-3 ${
+            isConfigured
+              ? 'bg-emerald-950/40 border-emerald-800/80 text-emerald-200'
+              : 'bg-amber-950/40 border-amber-800/80 text-amber-200'
+          }`}
+        >
           <Server className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
           <div className="leading-relaxed space-y-1">
-            <p className="font-semibold text-emerald-300">Live Supabase Project Connected</p>
+            <p className="font-semibold text-emerald-300">
+              {isConfigured ? 'Supabase Project Connected' : 'Environment Variables Required'}
+            </p>
             <p className="text-neutral-300 font-mono text-[11px] truncate max-w-[280px]">
-              {url || 'https://ytnegjvditymghjfqiuj.supabase.co'}
+              {isConfigured && supabaseUrl ? supabaseUrl : 'Configure in Netlify / Hosting Environment'}
             </p>
           </div>
         </div>
@@ -162,61 +158,30 @@ alter publication supabase_realtime add table public.messages;`;
           </div>
         </div>
 
-        {/* Multi-User Realtime Information */}
-        <div className="p-3 bg-neutral-900/60 border border-neutral-800 rounded-xl text-xs space-y-1.5 leading-relaxed text-neutral-300">
-          <div className="flex items-center space-x-1.5 text-white font-semibold">
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span>Multi-User RLS Protection Active</span>
+        {/* Netlify Deployment Security Instructions */}
+        <div className="p-3.5 bg-neutral-900/60 border border-neutral-800 rounded-xl text-xs space-y-2 leading-relaxed text-neutral-300">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-1.5 text-white font-semibold">
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              <span>Netlify Environment Variables</span>
+            </div>
+            <button
+              onClick={copyNetlifyVariables}
+              className="text-[10px] font-mono text-neutral-400 hover:text-white flex items-center space-x-1 px-1.5 py-0.5 bg-neutral-800 rounded"
+            >
+              {copiedNetlifyGuide ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+              <span>{copiedNetlifyGuide ? 'Copied' : 'Copy Names'}</span>
+            </button>
           </div>
           <p className="text-neutral-400 text-[11px]">
-            Direct messages are protected by PostgreSQL Row Level Security: only the sender and
-            recipient can read conversations.
+            To comply with Netlify secrets scanning, credentials must be set in your Netlify site dashboard under:
           </p>
+          <div className="bg-neutral-950 p-2.5 rounded-lg border border-neutral-800/80 font-mono text-[10px] space-y-1 text-neutral-300">
+            <div><span className="text-neutral-500">1.</span> Site configuration &gt; Environment variables</div>
+            <div><span className="text-cyan-400">VITE_SUPABASE_URL</span> = <span className="text-neutral-400">&lt;your-project-url&gt;</span></div>
+            <div><span className="text-cyan-400">VITE_SUPABASE_ANON_KEY</span> = <span className="text-neutral-400">&lt;your-anon-publishable-key&gt;</span></div>
+          </div>
         </div>
-
-        {/* Credentials Form */}
-        <form onSubmit={handleSave} className="space-y-3 pt-1 border-t border-neutral-900">
-          <div>
-            <label className="block text-[10px] font-mono text-neutral-400 mb-1">
-              SUPABASE PROJECT URL
-            </label>
-            <input
-              type="url"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              className="w-full bg-neutral-900 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-neutral-500 font-mono"
-            />
-          </div>
-
-          <div>
-            <label className="block text-[10px] font-mono text-neutral-400 mb-1">
-              SUPABASE ANON KEY
-            </label>
-            <input
-              type="password"
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              className="w-full bg-neutral-900 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-neutral-500 font-mono"
-            />
-          </div>
-
-          <div className="flex space-x-2 pt-1">
-            <button
-              type="submit"
-              disabled={!url.trim() || !key.trim()}
-              className="flex-1 py-2 bg-white text-black font-semibold rounded-xl text-xs hover:bg-neutral-200 disabled:opacity-40 transition"
-            >
-              Update Credentials
-            </button>
-            <button
-              type="button"
-              onClick={handleDisconnect}
-              className="px-3 py-2 bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-red-400 rounded-xl text-xs transition"
-            >
-              Disconnect
-            </button>
-          </div>
-        </form>
 
         {/* Copy Migration SQL */}
         <div className="space-y-2 pt-2 border-t border-neutral-900">

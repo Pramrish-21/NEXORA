@@ -48,14 +48,29 @@ export const ResetPasswordModal: React.FC = () => {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-fade-in">
       <div className="bg-neutral-950 border border-neutral-800 rounded-2xl w-full max-w-sm p-6 shadow-2xl space-y-4">
-        <div className="flex items-center space-x-2.5 pb-2 border-b border-neutral-900">
-          <div className="p-2 bg-neutral-900 rounded-xl text-white">
-            <KeyRound className="w-5 h-5 text-white" />
+        <div className="flex items-center justify-between pb-2 border-b border-neutral-900">
+          <div className="flex items-center space-x-2.5">
+            <div className="p-2 bg-neutral-900 rounded-xl text-white">
+              <KeyRound className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h3 className="font-bold text-sm text-white">Choose New Password</h3>
+              <p className="text-[11px] text-neutral-400">Verified via Supabase Recovery Link</p>
+            </div>
           </div>
-          <div>
-            <h3 className="font-bold text-sm text-white">Choose New Password</h3>
-            <p className="text-[11px] text-neutral-400">Verified via Supabase Recovery Link</p>
-          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setIsPasswordRecovery(false);
+              if (typeof window !== 'undefined') {
+                window.history.replaceState(null, '', window.location.pathname);
+              }
+            }}
+            className="p-1.5 text-neutral-500 hover:text-white rounded-lg transition"
+            title="Close"
+          >
+            <span className="text-base font-bold leading-none">&times;</span>
+          </button>
         </div>
 
         {error && (
