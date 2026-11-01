@@ -1,0 +1,6 @@
+{
+  "name": "NEXORA - Dark Social",
+  "description": "A dark, minimalist social media app with real-time messaging, feed interactions, user search, and live web exploration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
